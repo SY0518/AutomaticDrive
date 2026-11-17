@@ -1,33 +1,56 @@
-# ERP42 Racing: Pure Pursuit + Stanley hybrid real-controller integration
+# ERP42 Racing: Pure Pursuit + Stanley 하이브리드 실차 제어 안내서
 
-## Three Python files
+## 1. 파일 구성
 
-- `ERP42_Purepursuit.py`: reference path geometry, offline curvature precomputation, velocity/curvature adaptive lookahead, rear-axle-based Pure Pursuit.
-- `ERP42_Stanley.py`: front-axle-based Stanley lateral steering controller.
-- `ERP42_Main.py`: curvature-based switching, hysteresis, switch confirmation, steering crossfade / slew limit, serial PCU packet I/O, UDP pose input, safety checks and braking attempt.
+- **`ERP42_Purepursuit.py`**: 기준 경로 기하 계산, 경로 곡률 사전 계산, 속도·곡률 적응형 전방 주시 거리, 후륜 축 중심 기반 Pure Pursuit 조향.
+- **`ERP42_Stanley.py`**: 전륜 축 중심에서 횡방향 오차와 방향 오차를 계산하는 Stanley 조향.
+- **`ERP42_Main.py`**: 곡률에 따른 알고리즘 자동 전환, 히스테리시스, 전환 판정, 조향 명령 보간 및 변화율 제한, RS232 통신, UDP 차량 위치 입력, 주행 상태 감시 및 정지 명령.
 
-The files implement a **hardware I/O path**, but this is **not an OEM-approved or safety-certified autonomous vehicle package**. It has not been validated against an actual ERP42. Never drive it before on-site calibration and supervised low-speed testing. Use a functioning physical emergency-stop switch and a clear restricted test area. The supplied platform manual has conflicting steering conversion scales: chassis steering ratio 1/100 vs protocol steering = physical angle *71. Do not guess. The motor raw speed command 0..1000 is not a speed in m/s; no verified mapping was provided.
+**안전 관련 중요한 제한**: 이 코드는 실제 RS232 입출력을 포함하지만, **제조사 승인을 받은 자율주행 완제품이나 안전 인증 시스템이 아닙니다.** 실차 ERP42에서 검증한 결과도 없습니다. 현장 보정과 감독하의 저속 시험 이전에는 주행에 사용하지 마세요. 정상 작동하는 **물리적 비상 정지 스위치**, 통제된 시험 공간, 감시 인원이 필요합니다.
 
-## Confirmed by supplied ERP42 Racing manual
+제공된 매뉴얼에는 **조향 변환 계수에 서로 다른 설명(차체 사양 1/100과 프로토콜 ×71)**이 있으며, 속도 명령 Raw 값(0~1000)과 실제 m/s 간 대응표도 없습니다. 해당 값은 추측해서 입력하면 안 됩니다.
 
-- Rear-wheel drive, front-wheel steering; wheelbase `1.212 m`; front wheel ±`20 deg`.
-- Software-limited speed `20 km/h`. This **is not** the initial driving-speed target.
-- PCU RS232, 115200 8N1, 50ms frames: HLV->PCU `14 bytes` **big-endian**, PCU->HLV `20 bytes` **little-endian**.
-- `steer` raw range `-2000..2000`, negative = left.
-- HLV `SPEED` field `0..1000` is **motor raw**, PCU reports wheel RPM. Rear wheel diameter nominal `0.58m` and rolling diameter requires field verification.
-- `BRAKE` 1 = unbraked, 100 = full brake; if alive count does not update for ~0.3sec, Auto Fail full braking is expected from the PCU. Validate firmware behavior in a supervised test.
-- Control packet fields AorM, ESTOP, GEAR, SPEED, STEER, BRAKE, ALIVE. HLV AorM must transition 0 to 1 with remote switch in Auto mode.
+## 2. ERP42 Racing 매뉴얼에 근거한 차량 제원
 
-## Install and test (no hardware connected)
+| 항목 | 값 | 코드 적용 방식 |
+|---|---|---|
+| 구동 방식 | 전륜 조향·후륜 구동 | 전진 운동학 자전거 모델 |
+| 축거 | **1.212m** | Pure Pursuit 및 Stanley 공통 `wheelbase` |
+| 최대 앞바퀴 조향각 | **±20°** | 계산된 조향각 제한 |
+| 소프트웨어 주행 속도 상한 | **20km/h** | 차량 제원 한계. 초기 시험 속도와는 별개 |
+| RS232 통신 | 115200bps, 8N1, **50ms 주기** | `ERP42_Main.py` |
+| HLV→PCU 송신 | **14바이트, 빅엔디언** | `encode_command()` |
+| PCU→HLV 수신 | **20바이트, 리틀엔디언** | `decode_feedback()` |
+| 조향 Raw 범위 | -2000~2000 | Raw 명령 범위 확인, 음수=좌조향 |
+| 속도 명령 | 0~1000 Raw 값 | **m/s가 아니며 실측 보정표 필요** |
+| 속도 피드백 | 바퀴 RPM | 실측 유효 타이어 지름으로 m/s 변환 |
+| 후륜 타이어 표기 | 200/580R15 | 공칭 외경 0.58m, 실제 구름지름 검증 필요 |
+| 브레이크 | 1=제동 해제, 100=완전 제동 | 브레이크 반응 실측 필요 |
+| ALIVE | 0~255 증가 | 통신할 때 갱신. 약 0.3초 미갱신 시 Auto Fail 동작 여부 현장 검증 |
+
+매뉴얼의 Auto 진입 조건: 원격 조종기의 모드 스위치가 Auto에 있어야 하고, PCU와 정상 통신하면서 상위제어기의 AorM 값을 **0에서 1로 전환**해야 합니다.
+
+## 3. 설치 및 하드웨어 미연결 검사
+
+세 파이썬 파일을 **같은 폴더**에 둡니다. Python 3.10 이상을 권장합니다.
 
 ```bash
+# 실차 연결 없이 경로 계산, 조향, 모드 전환, 패킷 검사를 수행
 python ERP42_Main.py --self-test
+
+# 오프라인 예제 경로를 CSV로 생성
 python ERP42_Main.py --make-example-path example_path.csv
 ```
 
-The self-test covers: path geometry, Pure Pursuit and Stanley, exactly two mode switches on straight -> curve -> straight, ±20° limit, 14/20-byte endian framing and wheel-RPM-to-speed conversion. **It does not test actual actuators or brakes**.
+자체 검사는 직선→커브→직선의 **2회 모드 전환**, 조향각 ±20° 제한, 경로 곡률, 14/20바이트 패킷 처리와 RPM 변환을 점검합니다. **실제 조향 모터·브레이크·위치 센서의 동작을 검증하지는 않습니다.**
 
-### Route CSV (required for live mode)
+실차 통신은 `pyserial`이 필요합니다.
+
+```bash
+pip install pyserial
+```
+
+### 경로 CSV 형식
 
 ```csv
 x,y
@@ -37,35 +60,47 @@ x,y
 0.3,0.0
 ```
 
-Route is in metres, same local coordinate system as the position estimate. Waypoints must be strictly ordered in driving direction, spaced 0.01 to 0.80m, ideally smooth and non-self-intersecting. Do not send the automatically created example path to the real platform; the live route must be physically surveyed and checked for obstacles. The program rejects any reference path whose estimated maximum curvature exceeds 1/3.5 m^-1. That value is a *conservative preliminary limit* based on the manual's ambiguous R 3.5m description, not verified cornering capacity.
+- `x,y`: 미터 단위의 위치 좌표. 차량 위치 추정값과 **동일한 좌표계·원점**을 사용해야 합니다.
+- Waypoint는 주행 방향 순서대로 정렬되어야 하며, 인접 점 간격은 **0.01~0.80m**여야 합니다.
+- 경로는 가능한 한 매끄럽고 가까운 영역에서 자기 교차가 없도록 구성해야 합니다.
+- 자동 생성 예제 CSV는 **실제 차량에 입력할 주행 경로가 아닙니다**. 현장에서 측량하고 장애물·조향 한계를 검사한 별도 경로를 사용하세요.
+- 코드에서 최대 경로 곡률을 잠정적으로 `1/3.5 (1/m)` 이하로 제한합니다. 매뉴얼의 회전 반경 R=3.5m 설명은 기준점과 정의가 불명확하므로, 이 값을 검증된 물리적 한계로 간주하지 않습니다.
 
-### Pose input (required for live mode)
+## 4. 실시간 차량 위치 입력(필수)
 
-Another process (e.g. a ROS localization adapter) must send current vehicle pose to **localhost** UDP port `16742`, at least 20Hz, as UTF-8 JSON:
+이 코드는 GNSS·LiDAR·SLAM·IMU 위치 추정을 직접 구현하지 않습니다. 별도의 ROS 또는 위치 추정 어댑터가 **로컬 UDP 127.0.0.1:16742**로 **초당 최소 20회(20Hz)** 다음 JSON을 전송해야 합니다.
 
 ```json
 {"seq": 1539, "stamp_unix_s": 1790000000.123, "x": 4.15, "y": -0.23, "yaw": 0.054}
 ```
 
-`stamp_unix_s` **must** be the actual UNIX capture timestamp, not the sample above (which is only an example). `seq` must strictly increase. `x,y` must represent the **rear axle center**, yaw is radians CCW-positive, pose must use **same metric frame and origin as route**. Sensor offsets must be applied by the localization adapter. Capture and receive timestamps are checked; stale or invalid input attempts emergency stop. If the pose estimator runs on another computer, synchronize clocks and forward UDP through a local interface. Remote unauthenticated UDP should not be exposed to public networks.
+위 JSON의 숫자는 단순 예시입니다.
 
-### Measured motor speed map (required for live mode)
+| 필드 | 의미 |
+|---|---|
+| `seq` | 위치 갱신 때마다 증가하는 순번(정수) |
+| `stamp_unix_s` | 실제 센서 측정 시점의 UNIX 타임스탬프(초). 위 예시값 재사용 금지 |
+| `x`, `y` | **후륜 축 중심** 좌표(m), 경로와 같은 좌표계 |
+| `yaw` | 차량 진행 방향(rad), 반시계방향 양수 |
 
-Before enabling autonomous driving, measure **under supervision** a feed-forward mapping between requested vehicle speeds in m/s and validated PCU motor raw inputs. CSV:
+센서가 후륜 축 중심이 아닌 위치에 장착됐다면 위치 추정 어댑터가 좌표 변환을 수행해야 합니다. 입력 지연, 시간 불일치, 순번 오류가 감지되면 정지 명령을 시도합니다. 다른 컴퓨터에서 위치 추정이 수행되는 경우 시간 동기화와 로컬 인터페이스 전달이 필요하며, 인증되지 않은 원격 UDP를 외부 네트워크에 공개하지 마세요.
+
+## 5. 실차용 속도 보정표(필수)
+
+`--speed-map`에는 목표 속도(m/s)와 **현장에서 실측한 모터 Raw 명령값**의 대응표가 필요합니다. 다음과 같은 CSV를 작성하세요.
 
 ```csv
 speed_mps,raw_command
 0.0,0
-...MEASURED_MPS..., ...MEASURED_RAW...
-...MEASURED_MPS..., ...MEASURED_RAW...
 ```
 
-The dots are placeholders; the file must contain **actual measured numeric calibration data** in ascending order and at least enough data to cover `0.8 m/s`. There is no safe value to infer from the manual alone. Choose a verified raw ceiling and measure braking and steering response (including signs) separately. The software will refuse to connect without the calibration acknowledgements and raw limits.
+위 예시는 형식만 나타낸 것으로 **이대로는 실행할 수 없습니다.** 안전하게 구동계를 제한한 조건에서 0이 아닌 실측값을 추가하고, 속도와 Raw 명령이 엄격히 증가하도록 작성해야 합니다. 초기 기본 목표 속도인 0.8m/s까지 보정표가 포함되어야 합니다.
 
-### Hardware execution ONLY after physical verification
+**주의:** 속도 명령은 RPM이나 m/s가 아니라 제어기의 Raw 명령입니다. 매뉴얼만으로 대응값을 계산할 수 없습니다. 스로틀 Raw 상한, 브레이크 반응, 조향 응답·방향도 별도로 확인해야 합니다.
+
+## 6. 실차 실행 방법 — 보정·안전 확인을 마친 경우에 한함
 
 ```bash
-pip install pyserial
 python ERP42_Main.py \
   --enable-hardware \
   --path surveyed_route.csv \
@@ -80,26 +115,62 @@ python ERP42_Main.py \
   --confirm-safe-site
 ```
 
-All uppercase placeholder values must be replaced with experimentally verified numeric values. On Windows the serial port is typically `COMx`. The remote control operator must switch to Auto; the HLV initiates AorM 0->1. Live loop is 20 Hz with alive count increment. At any fault it attempts E-Stop (0->1) and full braking, but **software stop messages cannot replace the hardware E-stop**. Test physical and PCU watchdog behavior first.
+- `YOUR_VERIFIED_CEILING`: 실측 검증된 저속 Raw 가속 상한값(정수).
+- `YOUR_VERIFIED_SCALE`: 조향각 1도당 실제 PCU 명령 스케일(실측값). **71 또는 100을 임의로 대입하지 마세요.**
+- Windows에서는 보통 포트가 `COM3`과 같은 형식입니다.
+- 실행 전 원격 조종기 운용자가 Auto 모드를 선택해야 합니다.
+- 프로그램은 50ms 간격으로 명령을 송신하고 ALIVE 값을 증가시킵니다.
+- 위치·통신·차량 상태 이상 시 비상 정지 및 완전 제동 **명령을 시도**합니다. PCU 동작 확인 및 물리적 E-Stop은 별도이며, 소프트웨어 정지 명령만 믿어서는 안 됩니다.
 
-## Switching threshold / latency countermeasures
+CLI 옵션명, 파일명, CSV/JSON 필드명은 파이썬 코드와 통신 형식의 호환성을 위해 영어 그대로 유지했습니다.
 
-- Initial state: Pure Pursuit on straight path.
-- Enter Stanley when look-ahead **maximum absolute route curvature >= 0.075 m^-1** for **2 consecutive 50ms cycles** (~100ms). The physical radius is <=13.3m; initial threshold is a *tuning hypothesis*.
-- Return to Pure Pursuit only when curvature **<= 0.045 m^-1** for **8 cycles** (~400ms), and at least 450ms have passed since the previous switch. This keeps it from bouncing between methods near threshold.
-- Preview window = clamp(`1.2m + measured_speed*1.0s`, `2.0m`, `5.5m`). The preview detects a curve ahead so the algorithm can switch before entering the bend.
-- Path curvature is **precomputed once** at 0.25m arc-length intervals using 3-point geometry; range maximum queries use a sparse table O(1). Nearest path projection is restricted to a window around the last known progress (unless first acquisition). Only the selected lateral algorithm is evaluated each tick.
-- When switching, steering interpolates over 0.25s and is rate limited to an initial 45°/s. The motor raw command is separately ramp-limited. This can reduce steering discontinuity, but the parameters need validation against the ERP42 actual steering dynamics; it **does not guarantee absence of delay**.
-- Curves use lower target speed initially; hard rejection occurs for stale pose/telemetry, route/heading loss, speed excess, progress jump, or communication scheduling overrun.
+## 7. 직선·커브에서 알고리즘 전환 방식
 
-### Practical tests before unattended movement
+### 곡률 임계값과 히스테리시스
 
-1. Confirm serial framing and E-Stop behavior *with drive wheels safely restrained*, including disconnect, power cut and 0.3sec alive timeout; verify actual platform firmware revision.
-2. Confirm front wheel STEER direction and raw scale (71 vs 100 discrepancy), then measured actuator time response and steer-rate bound.
-3. Confirm wheel-RPM feedback units, effective wheel rolling circumference, and measured PCU raw command to vehicle speed; calibrate brakes.
-4. Check GNSS/SLAM localization rear-axle transform, heading sign/units, timestamps and coordinate frame.
-5. On a closed, cleared track, begin supervised low-speed runs and log curvature, switching state, lateral error, steering, speed, mode-change time, and E-stop triggers. Only then tune the adaptive gains / switch thresholds.
+| 설정 항목 | 기본값 | 목적 |
+|---|---|---|
+| `enter_curve` | 0.075 (1/m) | 이 곡률 이상이면 Stanley 진입 후보 |
+| `exit_curve` | 0.045 (1/m) | 이 곡률 이하이면 Pure Pursuit 복귀 후보 |
+| `enter_frames` | 2회 | 연속 판정으로 일시적 곡률 튐 방지(약 100ms) |
+| `exit_frames` | 8회 | 충분히 직선이 된 뒤 복귀(약 400ms) |
+| `min_stanley_hold_s` | 0.45초 | Stanley를 너무 빨리 해제하지 않음 |
+| `transition_blend_s` | 0.25초 | 전환 순간 조향각을 점진적으로 연결 |
+| `max_steering_rate_rad_s` | 45°/초 | 초기 조향 명령 변화율 제한(실측 필요) |
 
-## Why this is not turnkey yet
+- 최초에는 **Pure Pursuit**로 시작합니다.
+- 전방 구간 최대 곡률의 절댓값이 0.075 이상으로 **연속 2회** 확인되면 **Stanley**로 전환합니다.
+- 곡률이 0.045 이하로 **연속 8회** 확인되고 최소 유지 시간 0.45초도 지났을 때 **Pure Pursuit**로 복귀합니다.
+- 진입·복귀 임계값을 다르게 두는 **히스테리시스**로 경계 구간에서 모드가 반복 변경되는 현상을 억제합니다.
 
-No GNSS/IMU/LiDAR/SLAM sensor data, ROS topics, on-vehicle firmware version, validated steering scale, effective rolling radius, motor throttle calibration, hydraulic brake response or measured latency have been supplied. The software includes actual packet serialization and a physical-vehicle run path, but direct deployment without these calibrations is unsafe and can fail. This implementation is NOT equivalent to final integration testing or validation.
+이 임계값은 **초기 실험 가설**이며 최적값이나 검증된 안전값이 아닙니다.
+
+### 전환 지연을 줄이는 방법
+
+- **커브 사전 감지:** `Preview = clamp(1.2m + 실측 속도 × 1초, 2.0m, 5.5m)` 구간의 최대 곡률을 확인합니다. 따라서 커브에 진입하기 전에 전환 준비가 가능합니다.
+- **곡률 사전 계산:** 기준 경로의 0.25m 간격 샘플에서 세 점 기반 곡률을 한 번 계산하고, 구간 최댓값을 희소 테이블로 관리합니다. 범위 최대 곡률 조회는 O(1)입니다.
+- **최근접 경로 탐색 축소:** 이전 주행 위치 주변을 우선 탐색합니다. 최초 탐색에서는 전체 경로를 확인합니다.
+- **선택한 제어기만 실행:** 매 제어 주기에는 Pure Pursuit 또는 Stanley 중 현재 활성화된 하나만 조향 명령을 계산합니다.
+- **조향 연속화:** 전환 시 0.25초 동안 조향 명령을 보간하고, 초당 변화율도 제한합니다. 가속 Raw 명령의 상승률도 별도로 제한합니다.
+
+이 방식은 불필요한 연산과 전환 시 조향 급변을 줄이기 위한 것이지만, **전환 지연이나 진동이 전혀 없다는 보장은 아닙니다.** 실제 조향 액추에이터 지연과 구동 응답을 측정한 뒤 수치를 다시 정해야 합니다.
+
+### 속도 및 이상 상태 처리
+
+- 커브에서는 직선보다 낮은 초기 목표 속도를 적용합니다.
+- 곡률에 따른 횡가속도 제한과 경로 종점 감속도 함께 고려합니다.
+- 위치 또는 피드백 갱신 지연, 경로 이탈, 방향 오차 초과, 과속, 위치 추정 급변, 제어 주기 초과 시 주행을 중단하고 정지 명령을 시도합니다.
+
+## 8. 실차 구동 전 확인 순서
+
+1. **바퀴를 안전하게 제한한 상태**에서 RS232 패킷 수신·송신과 E-Stop 동작을 확인합니다. 통신 단절, 전원 차단, 0.3초 ALIVE 갱신 중단 시 PCU의 실제 반응을 검증하고 펌웨어 버전을 확인합니다.
+2. 앞바퀴 조향의 좌·우 방향과 Raw 변환 계수를 실측하고, 액추에이터 응답 시간 및 실제 조향 속도를 측정합니다.
+3. 휠 RPM의 단위와 유효 구름 원주를 확인하고, 목표 속도와 모터 Raw 명령의 대응표 및 브레이크 반응을 실측합니다.
+4. GNSS/SLAM 등 위치 추정의 후륜 축 중심 변환, yaw 부호 및 단위, 타임스탬프, 기준 경로와 좌표계 일치를 확인합니다.
+5. 통제된 시험장에서 감독하의 저속 시험을 실시하며 곡률·모드 전환·횡방향 오차·조향각·속도·전환 시점·정지 원인을 기록합니다. 그 이후에 제어 이득과 전환 임계값을 튜닝합니다.
+
+## 9. 아직 실차에서 검증되지 않은 항목
+
+차량에 설치된 GNSS/IMU/LiDAR/SLAM 데이터 및 ROS 토픽, 펌웨어 버전, 조향 변환 계수, 유효 타이어 구름 반경, 모터 Raw 속도 보정표, 유압 브레이크 응답, 실제 제어 지연 정보가 제공되지 않았습니다.
+
+따라서 현재 파일은 **실차 통신 및 제어 구조를 구현한 개발 버전**이지, 바로 차량에 투입 가능한 최종 검증본이 아닙니다. 현장 보정·통합 시험·안전 검증이 완료되어야 합니다.
